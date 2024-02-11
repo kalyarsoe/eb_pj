@@ -1,0 +1,569 @@
+https://teratail.com/questions/290721
+FCM pushまわりの仕様
+
+change project
+
+firebase logout
+firebase login
+ firebase projects:list
+ firebase use (プロジェクトID)
+
+PJが異なるとhttpcallableのURIが食い違ってしまう
+(全て移行すれば問題ないが)
+
+
+## 冪等性確保 ##
+https://techblog.sgr-ksmt.dev/2019/12/16/104935/
+
+import * as admin from 'firebase-admin'
+const hasAlreadyTriggered = (
+  eventID: string,
+  suffix: string
+): Promise<boolean> => {
+  const id = [eventID, suffix].join('-')
+  return firestore().runTransaction(async t => {
+    const ref = admin.firestore()
+      .collection('triggerEvents')
+      .doc(id)
+    const doc = await t.get(ref)
+    if (doc.exists) {
+      console.log(`EventID: ${id} has already triggered.`)
+      return true
+    } else {
+      t.set(ref, { createTime: admin.firestore.FieldValue.serverTimestamp() })
+      return false
+    }
+  })
+}
+
+
+import { EventContext } from 'firebase-functions'
+export const triggerOnce = <T>(
+  suffix: string,
+  handler: (data: T, context: EventContext) => PromiseLike<any> | any
+): ((data: T, context: EventContext) => PromiseLike<any> | any) => async (
+  data,
+  context
+) => {
+  if (await hasAlreadyTriggered(context.eventId, suffix)) {
+    return undefined
+  }
+  return handler(data, context)
+}
+
+---
+* usage
+import * as functions from 'firebase-functions'
+
+export const sendPostNotification = functions.firestore
+  .document('users/{userID}/posts/{postID}')
+  .onCreate(triggerOnce('sendPostNotification', async (snapshot, context) => {
+    // send notification to users
+  }))
+
+
+
+## 分割・コールドスタート ##
+https://techblog.sgr-ksmt.dev/2020/07/12/000842/
+
+
+https://devsakaso.com/vue-firebase-get-doc-id-before-adding/
+自動生成するdoc idをdocのフィールドに事前に追加する
+const collection = db.collection('playlists')
+      const newDoc = collection.doc().id
+      let newPlaylist = {
+        userId: state.user,
+        id: newDoc,
+        title: playlistTitle,
+        description: playlistDescription,
+      }
+      collection.doc(newDoc).set({
+        ...newPlaylist
+      })
+空で作ってsetでid含めて登録する方式？
+(addでcreateしてはだめ)
+---
+この方法の場合はonCreateだとidなしの状態になるので、
+onChangeでtriggerしないといけない?
+空で作成ではないのか？
+
+https://firebase.google.com/docs/firestore/manage-data/add-data?hl=ja
+>自動生成された ID を持つドキュメント リファレンスを作成して、後でそのリファレンスを使用するほうが実用的な場合もあります。このユースケースでは、doc() を呼び出します。
+リファレンス作成の段階でidが付けられる
+
+>.add(...) と .doc().set(...) は完全に同等なので、どちらでも使いやすい方を使うことができます。
+
+
+
+
+https://purpleeeee.com/posts/04ou_a6ibn3i
+ダミーのcollection上でidだけ発行して、
+doc(docid).set({id: docid})
+でid指定の生成をする方式
+
+
+
+
+
+
+https://firebase.google.com/docs/firestore/data-model?hl=ja#references
+> import { doc } from "firebase/firestore";
+> const alovelaceDocumentRef = doc(db, 'users/alovelace');
+
+v8だと
+db.doc("users/alovelace")
+のようだ
+
+v8→v9
+
+
+// user登録時のid profileについては、
+// firebase auth側
+//  regiterトリガーで
+//   1. master mapping table 参照
+//       emailで突合
+//   2. custom claim でadminなどrole設定
+//      主にsecurity rule用途
+//      一部、/groups/xxxx へのアクセスのためのroleも必要？
+//   3. "users/{uid}"にid mappingを設定
+//        uId (authのuId)
+//        gId ("/groups/"にグループ生成したときの自動生成gId)
+//        sName, uName (smartFit)
+//        locationDeviceId (LLpf)
+//        fcmToken (placeHolder)
+//        *ebhcId (本システム内でid管理するなら)
+
+
+
+functions:shell
+
+## user table 作成(random)
+init.forEmulator({})
+
+## 一応動作テスト
+working.control()
+
+## fetcherエミュレート
+smartfit.healthFetcher()
+
+
+
+
+- FCM送信時に文言をtype別に置き換える。
+- 未定義typeの場合はpushを送らずに捨てる
+
+13:熱中症危険継続
+14:熱中症危険継続      (13)発報後、 熱中症危険がx時間以上継続した 場合
+
+23:体調注意継続        (体調注意がx 分続いた場合)
+24:体調注意継続        (23)発報後、体 調注意(上限)がx時間以上継続 した場合
+32:心拍数異常
+34:心拍数異常上昇      (強い注意)
+
+
+# logging
+
+const { debug, error, info, log, warn } = require("firebase-functions/lib/logger");
+debug
+error
+info
+log
+warn
+write
+
+最後の引数がplain object(json)ならjsonpayloadとして記録され表示がきれいになる
+
+https://firebase.google.com/docs/reference/functions/logger?hl=ja
+
+
+##### LL-pf
+* authorization api
+POST /connect/token
+openid
+
+*location API
+GET /v2/device_locations/devices/:device_id/locations/latest
+GET /v2/device_locations/resource_owners/:resource_owner_id/locations/latest
+channel.read
+datastore.download
+
+* device API
+GET /v2/devices
+device.read
+
+* tracking device API
+GET /v2/tracking_devices
+POST /v2/tracking_data
+  uploadはテストデータ上げ用
+  
+
+####
+https://qiita.com/pro_matuzaki/items/f6d43ff18f970f906357
+
+users/${uid}
+にnameを含める(app側表示上必要:selfならapp側保持でもよいが、groupだとfirestore側保持が必要なため)
+  nameの扱い
+  auth側のprofile.display_nameなどは同期させない
+  あくまでapp側で表示するためのもの
+
+#####
+location取得をpush送信時ではなく定期非同期とし、push配信時はfirestoreからlatestを取るだけとする
+dailyのcleanupなどをどうするかは要検討だが、historyにしなければ
+/location/{uid}
+  (props)
+    latitude
+    longitude
+    timestamp
+のupdateでよい
+timestampについてはhistoryでないなら特にTimestamp型にする必要はないが、
+alertDoc作成時に「当日のlatest locationを付与」としたいので。
+  当日の定義をどうするかは問題
+    working start日時以降とする
+
+####
+      workingをどこに保持するか？
+        workingのstate
+          stopped..... 0
+          starting.... 1
+          started..... 2
+          stopping.... -1
+user docのpropとして
+  working.state
+  working.start_timestamp
+  working.stop_timestamp
+を定義する。propsとしてMap<String,dynamic>でworkingを定義する
+  stateはint
+  timestampはTimestamp
+
+####
+idもMapにまとめ直すことにする
+とりあえず「sysInfo」としておく
+(auth側のuser情報が「profile」なので)
+  (props)
+    sysInfo {
+      uId
+      gId
+      sName
+      uName
+      locationDeviceId
+    }
+
+####
+nameなどwritableな部分はsysInfoとは別に管理
+ネーミングをどうするか？
+  name
+  fcmToken
+  working
+あたりがwritable
+
+https://cloud.google.com/firestore/docs/security/rules-fields?hl=ja#restricting_fields_on_update
+更新時にフィールドを制限する
+特定のフィールドのみの変更を許可する
+
+security ruleでvalidationを行っていくのはちょっと微妙な感
+
+
+
+emulator endpoint
+
+https://localhost:$ポート番号/$PROJECT/us-central1/$関数名
+5001
+dev-proj-healthchecking-353609
+
+
+https://localhost:5001/dev-proj-healthchecking-353609/us-central1/
+
+階層化された関数名は"-"でつなぐるーる
+
+https://us-central1-dev-proj-healthchecking-353609.cloudfunctions.net/function-name
+
+
+curl -m 70 -X POST https://us-central1-dev-proj-healthchecking-353609.cloudfunctions.net/function-1 \
+-H "Authorization:bearer $(gcloud auth print-identity-token)" \
+-H "Content-Type:application/json" \
+-d '{}'
+
+
+########
+landlog
+
+ID: landlog
+　　PW: K8ysg5xC
+
+###
+stg-hcapp-test
+53566bdb-4c8b-41a2-9370-65332b0d808f
+e921364c07e8d365d49e8f85881efec37bc035a3dcd0f1f8ea3237d66435594d
+
+stg-hcapp-test2
+8d24442b-b4f6-4726-9069-531d708c4e93
+ebe923815c0ba445ce7437e5a426f08fbd0702faeae20ea3d719736f86c17b64
+
+###
+
+所属
+インターメディアプランニング株式会社
+c35aab32-3c79-4d23-945b-95eb19a572f1
+  (*) 07da5ee0-1702-429b-bcf0-5e17d942b0b5
+
+corporation
+企業
+現状なし
+
+group
+EBHCテストグループ
+040eb752-feb9-44e5-aa8f-66920b585f66
+  (*) e4189cfd-d339-4a80-a35c-2228c39059f4
+
+個人はaccount
+d86a3040-9d28-4976-8850-8122fd6e9043
+  (*) 438750fb-3987-49e8-a45e-b84736414b97
+
+--
+現場id
+7d59fd4f-2c6a-4175-b307-1b0eded25ec0
+  (*) 10a32d28-eaa1-4d15-8d64-f37cd24ccc53
+
+
+どうもlist devicesで見えるresource_owner_idだと
+(*)側のidになっている
+list resource ownerで出てくるのも(*)側
+なので、list resource ownerで調べて
+そのidを使うのが正しそう？
+
+どうも(*)のない側のidは
+型としてはgroup_id/user_idになるようだ。
+
+クライアントのリソースオーナーは
+企業,個人,現場,グループのいずれか、
+
+
+openid
+  * openidはtoken引き換え時指定は不要
+channel.read
+datastore.download
+device.read 
+
+・STG環境
+クライアントID
+f22a9bc3-b06d-443e-a410-311ea9dc219d
+クライアントシークレット
+0086c757305c39512a059658798ad08c909a137e88f6ed4b99d3cda75bf78917
+
+・本番環境
+クライアントID
+f547e5b8-ade4-4bdb-8258-713a23ad9500
+クライアントシークレット
+7eb42eeba83b9f0c93ca3282adddc90c7cfa44d55f56b1727346723f98b77d41
+
+
+auth.landlog.info
+Content-Type: application/x-www-form-urlencoded
+POST /connect/token
+grant_type=client_credentials&client_id=xyz&client_secret=abc&scope=message.publish
+
+api.landlog.info
+デバイスAPIは結構ややこしそう
+
+location-api.landlog.info
+GET /v2/device_locations/devices/:device_id/locations/latest
+
+
+[注記:使用予定API]
+・Authorization API
+・Device API
+・Location API
+※Tracking Device API
+   
+
+車両位置(一覧)取得：3秒ごと
+POST https://auth-pre.pf.sc-cloud.komatsu/connect/token
+    scope範囲にopenidつけてリクエストしてはいけない
+GET https://api-pre.pf.sc-cloud.komatsu/v2/sites/xxxxx
+    site.read
+GET https://api-pre.landlog.info/v2/resource_owners
+    resource_owner.read
+GET https://api-pre.pf.sc-cloud.komatsu/v2/sites/xxxxx/members
+    site.member.read
+POST https://collections-pre.landlog.info/v2/collections/location/search-latest
+    collection.data.read
+
+https://collections-pre.landlog.info/v2/collections/{collection_id}/search-latest
+  see: https://d2gxbokxa7awuu.cloudfront.net/collections_api_landlog_public.html#operation/postSearch-latest
+  paramとしてリソースオーナーID(現場ID)が必要
+  projectionはデフォルトのdataでよい
+  limit,offsetはページング用途(100entries/pageデフォルトでよい)
+
+site系はsite.readとsite.memeber.readが必要？
+そもそもweb,nativeのタイプではないのでsite APIは使わない
+
+resource_ownersもweb,nativeのタイプのみ
+
+########
+https://blog.g-gen.co.jp/entry/organization-policy-explained
+
+サービス アカウント キーの作成を無効化	constraints/iam.
+disableService
+AccountKeyCreation	ブール型。サービスアカウントの外部キー作成ができなくなる
+
+キーは作れないので workload identity連携など別のもので対応する必要がある
+
+
+
+############
+
+heatstroke_level
+0: ほぼ安全
+1: 注意
+2: 危険
+3: 危険継続 (アラート通知対象)
+
+health_level
+0: 平常
+1: 体調やや注意
+2: 体調注意
+3: 体調注意継続 (アラート通知対象)
+start後しばらくはnull
+
+
+
+####################
+
+uIdから決めないといけない
+
+RESOURCE_OWNER_ID
+  client_id
+  client_secret
+
+bulkでuidリスト→siteId list→set{resource_owner_id, client_id, client_secret}
+
+setlist.for(ent 単位)
+   
+
+firebase_auth_repo
+  firebaseAuthProvider
+    instance供給のみ
+
+  firebaseAuthIsAuthUserStreamProvider
+    loginかどうかのboolをstreamで戻す
+    *autoDispose
+
+  firebaseAuthUserIdStreamProvider
+    login中のuser.uid(nullable)をstreamで戻す
+    *autoDispose
+  
+  firebaseAuthUserIdStreamProvider
+    .futureでstreamからfutureに変えただけ
+    使用側で行い廃止したほうがよいかも
+    *autoDispose
+
+
+firebase_fcm_provider
+  fcmStateProvider
+    FcmStateNotifierのprovider
+
+    initToken
+      FCMConfigからgetToken
+    setToken
+      fcmState更新
+      firestore側更新 
+        TODO: user関連model操作は分離すべき
+
+firebase_firestore_group_alert_stream_provider
+  groupAlertsSnapshotStreamProvider
+    単純にfirestoreのsnapshot形式でstreamを流す
+  
+  groupAlertsStreamProvider
+    snapshotの中身をdoc.data()で取り出して流す
+
+firebase_firestore_user_profile_stream_provider
+  userProfileRefProvider
+    authUserIdに対応するdocRefを返すprovider
+  userProfileStreamProvider
+    docRefからsnapshotをstreamとして流す
+    中身はfirestoreのsnapshot形式なので呼び出し側でdoc.data()等する必要がある
+
+firebase_firestore_user_alerts_stream_provider
+  userAlertsSnapshotStreamProvider
+    uIdに相当するuserのalertsをsnapshotで返す
+  userAlertsStreamProvider
+    doc.data()したものを返す
+
+firebase_firestore_provider
+  updateUserName
+    model操作を行う関数をとりあえず切り出し
+    statenotifier以外だとmodel操作はどこにまとめるべきか？
+    (VM?)
+
+firestore_repository
+  firebaseFirestoreProvider
+    単にFirebaseFirestoreのインスタンスを返す
+
+
+
+
+################
+12/1
+* timestampの基準
+   fitbit側
+   
+
+
+* health dataが更新される条件
+   smartfit側で計算更新がないと更新されない
+   - 心拍＋カロリーが入ってないと駄目
+   
+
+* alert API
+   擬似的に確認する手段はないか？
+     - ない
+   駄目ならsample dataで確認する
+     - 
+   →パラメータを緩めで出やすくする
+     - これで行う
+
+＃とりあえず、fitbitデバイスはスマホのgmailアドレスと紐づける
+
+01 - 
+02 - done - 
+03 - 
+04 - 
+05 - done - kawaguchi
+
+----  
+
+Deployment 
+1) npm install
+2) npm run lint -- --fix
+3) npm run build 
+4) rm package-lock.json
+5) npm start->stop
+6) firebase deploy --only functions:locationInfo-onCreate(teminal)  or  npm run deploy   
+
+=> Changed Smartfit data fetching process with multiple keys of sites collection in alert creation and health creation processes 
+=> Modified code in smartfit_api_real_client.ts file 
+=> To deploy -> firebase deploy --only functions:smartfit-alertFetcher
+                                                 smartfit-healthFetcher
+                                                 working-control  
+
+-----------------------------------------------------------
+For Email Transaction process(oct/2023) Release
+***********************************************
+1.Add emails in user collections
+2.Add at .env file
+  SENDGRID_API_KEY="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"
+  HOST_MAIL_ADDRESS="no-reply@smartconstruction.com"
+  HOST_MAIL_NAME="健康管理サービス"
+  SYSTEM_URL="https://dev-proj-healthchecking-353609.web.app"
+
+3.Need to run => npm install --save @sendgrid/mail 
+
+4.Deploy function list => 1.alertMessage-alertMessageManager (alert mail)
+                          2.authUser-createUser (user authentication for adding email)
+                          3.smartfit-alertFetcher  (function log modified)
+                          4.smartfit-healthFetcher (function log modified)
+------------------------------------------------------------------------------------ 
+Added real weather API call function
+************************************ 
+Deploy function => weather-weatherForecaster
+
